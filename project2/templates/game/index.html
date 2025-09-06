@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Memory Match — Simple Game</title>
+  <style>
+    :root{--bg:#0b1020;--card:#0f1724;--accent:#60a5fa;--card-face:#f8fafc;--win:#34d399}
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial;color:var(--card-face);background:linear-gradient(180deg,#041025 0%,var(--bg) 100%);display:grid;place-items:center;padding:24px}
+    .wrap{width:min(960px,96vw);max-width:960px}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+    h1{font-size:20px;margin:0;display:flex;gap:10px;align-items:center}
+    .controls{display:flex;gap:8px;align-items:center}
+    button{background:transparent;border:1px solid rgba(255,255,255,.08);color:var(--card-face);padding:8px 12px;border-radius:10px;cursor:pointer;font-weight:600}
+    button.primary{background:linear-gradient(90deg,var(--accent),#7dd3fc);color:#07203a;border:none}
+    .meta{display:flex;gap:12px;align-items:center;color:rgba(255,255,255,.75);font-size:14px}
+
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;background:transparent}
+    @media(min-width:720px){.grid{grid-template-columns:repeat(6,1fr)}}
+
+    .card{position:relative;padding-top:140%;border-radius:10px;perspective:1000px;cursor:pointer}
+    .card.disabled{pointer-events:none;opacity:.9}
+    .inner{position:absolute;inset:0;border-radius:10px;transform-style:preserve-3d;transition:transform .5s cubic-bezier(.24,.9,.26,1);box-shadow:0 6px 18px rgba(2,6,23,.6)}
+    .card.flipped .inner{transform:rotateY(180deg)}
+
+    .face{position:absolute;inset:0;display:grid;place-items:center;border-radius:10px;backface-visibility:hidden;font-weight:800;font-size:28px}
+    .front{background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(255,255,255,.01));border:1px solid rgba(255,255,255,.04)}
+    .back{background:linear-gradient(180deg,var(--card),#0b1220);transform:rotateY(180deg);border:1px solid rgba(255,255,255,.03);color:var(--accent)}
+
+    .matched .inner{box-shadow:0 10px 30px rgba(52,211,153,.12);border:2px solid rgba(52,211,153,.18)}
+
+    .footer{display:flex;justify-content:space-between;align-items:center;margin-top:16px;color:rgba(255,255,255,.8)}
+    .small{font-size:13px;color:rgba(255,255,255,.7)}
+
+    .overlay{position:fixed;inset:0;display:grid;place-items:center;background:linear-gradient(0deg,rgba(2,6,23,.6),rgba(2,6,23,.6));z-index:50}
+    .modal{background:linear-gradient(180deg,#071022,#071428);padding:22px;border-radius:12px;border:1px solid rgba(255,255,255,.04);min-width:260px;text-align:center}
+    .modal h2{margin:0 0 8px}
+    .modal p{margin:0 0 16px;color:rgba(255,255,255,.8)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>🧠 Memory Match</h1>
+      <div class="controls">
+        <div class="meta">
+          <div id="moves">Moves: 0</div>
+          <div id="time">Time: 0s</div>
+        </div>
+        <button id="shuffleBtn">Shuffle</button>
+        <button id="newBtn" class="primary">New Game</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="board" class="grid" aria-label="Memory board"></section>
+      <div class="footer">
+        <div class="small">Match all pairs to win. Click or tap cards to flip.</div>
+        <div>
+          <button id="hintBtn">Hint</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <template id="cardTpl">
+    <div class="card" tabindex="0">
+      <div class="inner">
+        <div class="face front"></div>
+        <div class="face back"></div>
+      </div>
+    </div>
+  </template>
+
+  <div id="winOverlay" class="overlay" style="display:none">
+    <div class="modal">
+      <h2>🎉 You Win!</h2>
+      <p id="statsText">Great job.</p>
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:12px">
+        <button id="playAgain">Play Again</button>
+        <button id="closeWin">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      const boardEl = document.getElementById('board');
+      const tpl = document.getElementById('cardTpl');
+      const movesEl = document.getElementById('moves');
+      const timeEl = document.getElementById('time');
+      const shuffleBtn = document.getElementById('shuffleBtn');
+      const newBtn = document.getElementById('newBtn');
+      const hintBtn = document.getElementById('hintBtn');
+      const winOverlay = document.getElementById('winOverlay');
+      const statsText = document.getElementById('statsText');
+      const playAgain = document.getElementById('playAgain');
+      const closeWin = document.getElementById('closeWin');
+
+      const ICONS = ['🍎','🍌','🍇','🍒','🍓','🍍','🥝','🍑','🍉','🥥','🍋','🥭'];
+      // grid size: we'll use 12 cards (6 pairs) on small screens, 24 (12 pairs) on wide.
+      let pairsCount = window.innerWidth >= 720 ? 12 : 6;
+
+      let deck = [];
+      let flipped = []; // indices
+      let matchedCount = 0;
+      let moves = 0;
+      let timer = null;
+      let seconds = 0;
+
+      function formatTime(s){ return s + 's'; }
+
+      function startTimer(){ if(timer) return; timer = setInterval(()=>{ seconds++; timeEl.textContent = 'Time: ' + formatTime(seconds); },1000);} 
+      function stopTimer(){ clearInterval(timer); timer=null; }
+
+      function buildDeck(){
+        const chosen = ICONS.slice(0,pairsCount);
+        deck = [...chosen, ...chosen];
+        shuffle(deck);
+      }
+
+      function shuffle(a){
+        for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
+      }
+
+      function renderBoard(){
+        boardEl.innerHTML='';
+        deck.forEach((val, idx)=>{
+          const node = tpl.content.firstElementChild.cloneNode(true);
+          const front = node.querySelector('.front');
+          const back = node.querySelector('.back');
+          front.textContent = '';
+          back.textContent = val;
+          node.dataset.index = idx;
+          node.addEventListener('click', onCardClick);
+          node.addEventListener('keydown', e=>{ if(e.key==='Enter' || e.key===' ') onCardClick.call(node,e); });
+          boardEl.appendChild(node);
+        });
+      }
+
+      function onCardClick(e){
+        const card = this || e.currentTarget;
+        const idx = Number(card.dataset.index);
+        if(card.classList.contains('flipped') || card.classList.contains('matched')) return;
+        if(flipped.length===2) return; // prevent flipping more than 2
+
+        flipCard(card);
+        flipped.push({idx,card});
+
+        if(flipped.length===1){ startTimer(); }
+
+        if(flipped.length===2){
+          moves++; movesEl.textContent = 'Moves: ' + moves;
+          const [a,b] = flipped;
+          if(deck[a.idx]===deck[b.idx]){
+            // match
+            a.card.classList.add('matched');
+            b.card.classList.add('matched');
+            matchedCount += 1;
+            flipped = [];
+            if(matchedCount===pairsCount){ onWin(); }
+          } else {
+            // not match
+            setTimeout(()=>{
+              unflipCard(a.card); unflipCard(b.card);
+              flipped = [];
+            },700);
+          }
+        }
+      }
+
+      function flipCard(card){ card.classList.add('flipped'); }
+      function unflipCard(card){ card.classList.remove('flipped'); }
+
+      function resetGame(newGrid=false){
+        stopTimer(); seconds=0; timeEl.textContent='Time: 0s'; moves=0; movesEl.textContent='Moves: 0'; flipped=[]; matchedCount=0;
+        if(newGrid){ pairsCount = window.innerWidth >=720 ? 12 : 6; }
+        buildDeck(); renderBoard();
+      }
+
+      function onWin(){ stopTimer(); const score = Math.max(0, Math.round((pairsCount*100)/(moves || 1))); statsText.textContent = `Time: ${formatTime(seconds)} • Moves: ${moves} • Score: ${score}`; winOverlay.style.display='grid'; }
+
+      shuffleBtn.addEventListener('click', ()=>{ buildDeck(); renderBoard(); });
+      newBtn.addEventListener('click', ()=>{ resetGame(true); });
+      playAgain.addEventListener('click', ()=>{ winOverlay.style.display='none'; resetGame(true); });
+      closeWin.addEventListener('click', ()=>{ winOverlay.style.display='none'; });
+      hintBtn.addEventListener('click', ()=>{ // show two unmatched cards briefly
+        const unmatched = Array.from(boardEl.querySelectorAll('.card')).filter(c=>!c.classList.contains('matched') && !c.classList.contains('flipped'));
+        if(unmatched.length<2) return; shuffle(unmatched); const a=unmatched[0], b=unmatched[1]; flipCard(a); flipCard(b); setTimeout(()=>{ unflipCard(a); unflipCard(b); },800);
+      });
+
+      // initialize
+      resetGame(true);
+
+      // responsive grid change on resize
+      window.addEventListener('resize', ()=>{
+        const newPairs = window.innerWidth>=720 ? 12 : 6;
+        if(newPairs !== pairsCount){ pairsCount = newPairs; resetGame(true); }
+      });
+
+      // accessibility: allow keyboard navigation between cards
+      boardEl.addEventListener('keydown', (e)=>{
+        const focusable = Array.from(boardEl.querySelectorAll('.card'));
+        const idx = focusable.indexOf(document.activeElement);
+        if(idx===-1) return;
+        let next = idx;
+        if(e.key==='ArrowRight') next = (idx+1)%focusable.length;
+        if(e.key==='ArrowLeft') next = (idx-1+focusable.length)%focusable.length;
+        if(e.key==='ArrowDown') next = (idx+ (window.innerWidth>=720?6:4))%focusable.length;
+        if(e.key==='ArrowUp') next = (idx - (window.innerWidth>=720?6:4) + focusable.length)%focusable.length;
+        if(next!==idx){ focusable[next].focus(); e.preventDefault(); }
+      });
+
+    })();
+  </script>
+</body>
+</html>
